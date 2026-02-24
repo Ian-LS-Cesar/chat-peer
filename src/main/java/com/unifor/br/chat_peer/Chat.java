@@ -6,7 +6,9 @@ import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 
 public class Chat {
@@ -14,6 +16,7 @@ public class Chat {
     private String userName;
     private ServerSocket serverSocket;
     private List<Socket> connections = new ArrayList<>();
+    private Map<Socket, PrintWriter> writers = new HashMap<>();
 
     public Chat(String userName, int port) {
         this.userName = userName;
@@ -23,8 +26,6 @@ public class Chat {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-
-
     }
 
     public void start() {
@@ -47,14 +48,12 @@ public class Chat {
         }
     }
 
-    private void broadcastMessage(String mensagem) {
+    private synchronized void broadcastMessage(String mensagem) {
+        String formattedMessage = userName + ": " + mensagem;
         for (Socket socket : connections) {
-            try {
-                PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                out.println(userName + ": " + mensagem);
-
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+            PrintWriter writer = writers.get(socket);
+            if (writer != null) {
+                writer.println(formattedMessage);
             }
         }
     }
@@ -63,7 +62,11 @@ public class Chat {
         while (true) {
             try {
                 Socket socket = serverSocket.accept();
-                connections.add(socket);
+                PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
+                synchronized (this) {
+                    connections.add(socket);
+                    writers.put(socket, writer);
+                }
                 new Thread(() -> handleConnection(socket)).start();
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -76,20 +79,31 @@ public class Chat {
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             String mensagem;
             while ((mensagem = in.readLine()) != null) {
-                System.out.println("Mensagem: " + mensagem);
+                System.out.println(mensagem);
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            System.err.println("Conexão perdida");
+        } finally {
+            synchronized (this) {
+                connections.remove(socket);
+                writers.remove(socket);
+            }
+            try {
+                socket.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
     }
 
     public void connectionToPeer(String host, int port) {
         try {
             Socket socket = new Socket(host, port);
-            connections.add(socket);
-
-            PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-            out.println("Peer: " + userName);
+            PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
+            synchronized (this) {
+                connections.add(socket);
+                writers.put(socket, writer);
+            }
             new Thread(() -> handleConnection(socket)).start();
             System.out.println("Conectado a um peer em: " + host + ":" + port);
         } catch (IOException e) {
@@ -108,7 +122,6 @@ public class Chat {
         Chat peer = new Chat(userName, port);
         peer.start();
 
-        // Loop para conectar a múltiplos peers
         while (true) {
             System.out.println("Deseja conectar a outro peer? (S/N):");
             String resposta = scanner.nextLine();
@@ -123,7 +136,6 @@ public class Chat {
             }
         }
 
-        // Não feche o scanner para manter System.in disponível
         System.out.println("\n=== Chat iniciado! Digite suas mensagens abaixo: ===\n");
         peer.startUserInput();
     }
