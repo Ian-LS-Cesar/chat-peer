@@ -1,15 +1,11 @@
 package com.unifor.br.chat_peer;
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Scanner;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.util.*;
 
 public class Chat {
 
@@ -17,14 +13,41 @@ public class Chat {
     private ServerSocket serverSocket;
     private List<Socket> connections = new ArrayList<>();
     private Map<Socket, PrintWriter> writers = new HashMap<>();
+    private List<String> messageHistory = new ArrayList<>();
+    private static final String HISTORY_FILE = "chat_history.txt";
 
     public Chat(String userName, int port) {
         this.userName = userName;
         try {
             this.serverSocket = new ServerSocket(port);
-            System.out.println("O Peer " + userName + " está ouvindo na port: " + port);
+            loadHistory();
+            System.out.println(userName + " está ouvindo na porta: " + port);
         } catch (IOException e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    private void loadHistory() {
+        try {
+            if (Files.exists(Paths.get(HISTORY_FILE))) {
+                messageHistory = Files.readAllLines(Paths.get(HISTORY_FILE));
+                System.out.println("Histórico carregado: " + messageHistory.size() + " mensagens");
+            }
+        } catch (IOException e) {
+            System.err.println("Erro ao carregar histórico: " + e.getMessage());
+        }
+    }
+
+    private void saveMessage(String message) {
+        try {
+            Files.write(
+                    Paths.get(HISTORY_FILE),
+                    (message + System.lineSeparator()).getBytes(),
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.APPEND
+            );
+        } catch (IOException e) {
+            System.err.println("Erro ao salvar mensagem: " + e.getMessage());
         }
     }
 
@@ -41,7 +64,13 @@ public class Chat {
             BufferedReader userInput = new BufferedReader(new InputStreamReader(System.in));
             while (true) {
                 String mensagem = userInput.readLine();
-                broadcastMessage(mensagem);
+                if (mensagem.equalsIgnoreCase("/history")){
+                    showHistory();
+                } else if (mensagem.equalsIgnoreCase("/clear")) {
+                    clearHistory();
+                } else {
+                    broadcastMessage(mensagem);
+                }
             }
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -50,11 +79,36 @@ public class Chat {
 
     private synchronized void broadcastMessage(String mensagem) {
         String formattedMessage = userName + ": " + mensagem;
+        messageHistory.add(formattedMessage);
+        saveMessage(formattedMessage);
+
         for (Socket socket : connections) {
             PrintWriter writer = writers.get(socket);
             if (writer != null) {
                 writer.println(formattedMessage);
             }
+        }
+    }
+
+    private synchronized void showHistory() {
+        System.out.println("\n=== Histórico de mensagens ===");
+        if (messageHistory.isEmpty()) {
+            System.out.println("Nenhuma mensagem registrada");
+        } else {
+            for (String msg : messageHistory) {
+                System.out.println(msg);
+            }
+        }
+        System.out.println("=== Fim do Histórico ===\n");
+    }
+
+    private synchronized void clearHistory() {
+        try {
+            Files.deleteIfExists(Paths.get(HISTORY_FILE));
+            messageHistory.clear();
+            System.out.println("Histórico limpo com sucesso!");
+        } catch (IOException e) {
+            System.err.println("Erro ao limpar histórico: " + e.getMessage());
         }
     }
 
@@ -79,6 +133,10 @@ public class Chat {
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             String mensagem;
             while ((mensagem = in.readLine()) != null) {
+                synchronized (this) {
+                    messageHistory.add(mensagem);
+                    saveMessage(mensagem);
+                }
                 System.out.println(mensagem);
             }
         } catch (IOException e) {
@@ -136,7 +194,9 @@ public class Chat {
             }
         }
 
-        System.out.println("\n=== Chat iniciado! Digite suas mensagens abaixo: ===\n");
+        System.out.println("\n=== Chat iniciado! Digite suas mensagens abaixo: ===");
+        System.out.println("Digite /history para ver todas as mensagens");
+        System.out.println("Digite /clear para limpar o histórico\n");
         peer.startUserInput();
     }
 }
