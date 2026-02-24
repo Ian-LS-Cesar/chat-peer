@@ -1,5 +1,7 @@
 package com.unifor.br.chat_peer;
 import java.io.*;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
@@ -15,6 +17,7 @@ public class Chat {
     private Map<Socket, PrintWriter> writers = new HashMap<>();
     private List<String> messageHistory = new ArrayList<>();
     private static final String HISTORY_FILE = "chat_history.txt";
+    private volatile boolean running = true;
 
     public Chat(String userName, int port) {
         this.userName = userName;
@@ -62,9 +65,14 @@ public class Chat {
     private void listenForUserinput() {
         try {
             BufferedReader userInput = new BufferedReader(new InputStreamReader(System.in));
-            while (true) {
+            while (running) {
                 String mensagem = userInput.readLine();
-                if (mensagem.equalsIgnoreCase("/history")){
+                if (mensagem == null) break;
+
+                if (mensagem.equalsIgnoreCase("/quit") || mensagem.equalsIgnoreCase("/exit")) {
+                    shutdown();
+                    break;
+                } else if (mensagem.equalsIgnoreCase("/history")){
                     showHistory();
                 } else if (mensagem.equalsIgnoreCase("/clear")) {
                     clearHistory();
@@ -73,7 +81,9 @@ public class Chat {
                 }
             }
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            if (running) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
@@ -113,7 +123,7 @@ public class Chat {
     }
 
     private void listenForConnections() {
-        while (true) {
+        while (running) {
             try {
                 Socket socket = serverSocket.accept();
                 PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
@@ -123,7 +133,9 @@ public class Chat {
                 }
                 new Thread(() -> handleConnection(socket)).start();
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                if (running) {
+                    System.err.println("Erro ao aceitar conexão: " + e.getMessage());
+                }
             }
         }
     }
@@ -132,7 +144,7 @@ public class Chat {
         try {
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
             String mensagem;
-            while ((mensagem = in.readLine()) != null) {
+            while ((mensagem = in.readLine()) != null && running) {
                 synchronized (this) {
                     messageHistory.add(mensagem);
                     saveMessage(mensagem);
@@ -140,7 +152,9 @@ public class Chat {
                 System.out.println(mensagem);
             }
         } catch (IOException e) {
-            System.err.println("Conexão perdida");
+            if (running) {
+                System.err.println("Conexão perdida");
+            }
         } finally {
             synchronized (this) {
                 connections.remove(socket);
@@ -169,6 +183,38 @@ public class Chat {
         }
     }
 
+    public void shutdown() {
+        running = false;
+        System.out.println("\n=== Encerrando chat ===");
+
+        synchronized (this) {
+            for (Socket socket : connections) {
+                try {
+                    PrintWriter writer = writers.get(socket);
+                    if (writer != null) {
+                        writer.close();
+                    }
+                    socket.close();
+                } catch (IOException e) {
+                    System.err.println("Erro ao fechar conexão: " + e.getMessage());
+                }
+            }
+            connections.clear();
+            writers.clear();
+        }
+
+        try {
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                serverSocket.close();
+            }
+        } catch (IOException e) {
+            System.err.println("Erro ao fechar servidor: " + e.getMessage());
+        }
+
+        System.out.println("Chat encerrado com sucesso!");
+        System.exit(0);
+    }
+
     public static void main(String[] args) {
         Scanner scanner = new Scanner(System.in);
 
@@ -179,6 +225,10 @@ public class Chat {
 
         Chat peer = new Chat(userName, port);
         peer.start();
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            peer.shutdown();
+        }));
 
         while (true) {
             System.out.println("Deseja conectar a outro peer? (S/N):");
@@ -196,7 +246,8 @@ public class Chat {
 
         System.out.println("\n=== Chat iniciado! Digite suas mensagens abaixo: ===");
         System.out.println("Digite /history para ver todas as mensagens");
-        System.out.println("Digite /clear para limpar o histórico\n");
+        System.out.println("Digite /clear para limpar o histórico");
+        System.out.println("Digite /quit ou /exit para sair\n");
         peer.startUserInput();
     }
 }
